@@ -64,3 +64,9 @@ jobs:
       - run: flutter pub get
       - name: Build iOS simulator app
         run: flutter build ios --simulator --no-codesign
+      - name: Upload iOS simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultron-ios-simulator-app
+          path: build/ios/iphonesimulator/Runner.app
+          if-no-files-found: error
