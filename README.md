@@ -10,7 +10,7 @@ This repository contains the LiveKit token service and Flutter voice-connection 
 4. The Flutter app connects to LiveKit and publishes microphone audio.
 5. Your deployed LiveKit Agents worker joins the same room and runs ULTRON's voice/AI pipeline.
 
-The LiveKit API key and secret exist only in the Python service environment. Never put them in Flutter, Git, or a public CI variable.
+The LiveKit API key and secret exist only in the Python service environment. Never put them in Flutter, Git, or a public CI variable. Set `LIVEKIT_AGENT_NAME` in the backend only if you want explicit dispatch to a named worker; it must match the worker's registered agent name. Leave it empty if your worker uses automatic dispatch.
 
 ## Backend setup
 
