@@ -112,6 +112,18 @@ def create_livekit_token(
                 )
             )
         )
+
+        # Explicit dispatch is optional. Leave unset if the worker uses
+        # automatic dispatch; set it to the registered LiveKit agent name
+        # when this app should always start a particular ULTRON agent.
+        agent_name = os.getenv("LIVEKIT_AGENT_NAME", "").strip()
+        if agent_name:
+            access_token = access_token.with_room_config(
+                api.RoomConfiguration(
+                    agents=[api.RoomAgentDispatch(agent_name=agent_name)]
+                )
+            )
+
         return TokenResponse(
             server_url=required_env("LIVEKIT_URL"),
             participant_token=access_token.to_jwt(),
