@@ -22,6 +22,8 @@ jobs:
           cache: true
       - name: Generate Android and iOS platform projects
         run: flutter create --platforms=android,ios --project-name ultron_mobile .
+      - name: Remove generated placeholder widget test
+        run: rm -f test/widget_test.dart
       - name: Install dependencies
         run: flutter pub get
       - name: Analyze
