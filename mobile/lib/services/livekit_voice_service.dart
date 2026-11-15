@@ -57,11 +57,18 @@ class UltronLiveKitVoiceService {
     }
 
     final room = lk.Room();
-    await room.connect(serverUrl, participantToken);
-    _room = room;
-    await setLanguage(languageCode);
-    await room.localParticipant?.setMicrophoneEnabled(true);
-    return room;
+    try {
+      await room.connect(serverUrl, participantToken);
+      _room = room;
+      await setLanguage(languageCode);
+      await room.localParticipant?.setMicrophoneEnabled(true);
+      return room;
+    } catch (_) {
+      _room = null;
+      await room.disconnect();
+      await room.dispose();
+      rethrow;
+    }
   }
 
   /// Sends the user's requested conversation language to the ULTRON agent.
