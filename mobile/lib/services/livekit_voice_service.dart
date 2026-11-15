@@ -22,7 +22,7 @@ class UltronLiveKitVoiceService {
   lk.Room? _room;
   lk.Room? get room => _room;
 
-  Future<lk.Room> connect({String? sessionId}) async {
+  Future<lk.Room> connect({String? sessionId, String languageCode = 'auto'}) async {
     final user = _auth.currentUser;
     if (user == null) {
       throw StateError('Sign in before starting an ULTRON voice session.');
@@ -58,9 +58,36 @@ class UltronLiveKitVoiceService {
 
     final room = lk.Room();
     await room.connect(serverUrl, participantToken);
-    await room.localParticipant?.setMicrophoneEnabled(true);
     _room = room;
+    await setLanguage(languageCode);
+    await room.localParticipant?.setMicrophoneEnabled(true);
     return room;
+  }
+
+  /// Sends the user's requested conversation language to the ULTRON agent.
+  /// The LiveKit Agents worker must subscribe to the "ultron.control" topic
+  /// and handle the "ultron.language.set" message type.
+  Future<void> setLanguage(String languageCode) async {
+    const supported = {
+      'auto', 'en', 'hi', 'te', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa',
+      'ur', 'ar', 'es', 'fr', 'de', 'pt', 'ru', 'ja', 'ko', 'zh', 'th',
+      'id', 'vi', 'tr', 'it', 'nl', 'pl',
+    };
+    if (!supported.contains(languageCode)) {
+      throw ArgumentError.value(languageCode, 'languageCode', 'Unsupported language');
+    }
+    final participant = _room?.localParticipant;
+    if (participant == null) {
+      throw StateError('Connect to a voice session before changing its language.');
+    }
+    await participant.publishData(
+      utf8.encode(jsonEncode({
+        'type': 'ultron.language.set',
+        'language': languageCode,
+      })),
+      reliable: true,
+      topic: 'ultron.control',
+    );
   }
 
   Future<void> disconnect() async {
