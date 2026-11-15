@@ -78,3 +78,16 @@ Deploy the ULTRON LiveKit Agents worker separately with its own server-side cred
 - Configure Firebase App Check / device attestation if appropriate for your threat model.
 - Keep the LiveKit agent worker private and deploy it independently of the token API.
 - Never commit `.env`, service-account JSON, certificates, or signing keys.
+
+
+## Mobile multilingual voice controls
+
+The Flutter app keeps all navigation and control labels in English. The voice screen includes a language selector for automatic detection and 27 explicit language choices, including Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Urdu, Arabic, Spanish, French, German, Portuguese, Russian, Japanese, Korean, Chinese, Thai, Indonesian, Vietnamese, Turkish, Italian, Dutch, and Polish.
+
+When a voice session connects or the selection changes, the app publishes a reliable LiveKit data packet on topic `ultron.control`:
+
+```json
+{ "type": "ultron.language.set", "language": "te" }
+```
+
+Use `auto` for automatic language detection. The language preference is sent to the LiveKit room; the deployed ULTRON Agents worker must subscribe to this topic and apply the preference to its speech recognition, LLM instructions, and text-to-speech voice. The mobile repository currently contains the token service and Flutter client, not the Agents worker, so multilingual speech is not end-to-end until that worker-side handler is deployed. Recognition and pronunciation depend on the selected speech providers and their language coverage; no provider can be assumed to support literally every language.
