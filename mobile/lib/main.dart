@@ -167,7 +167,39 @@ class _VoiceScreenState extends State<VoiceScreen> {
       if (idToken == null || idToken.isEmpty) {
         throw StateError('Could not obtain a Firebase sign-in token.');
       }
-      final base = sessionEndpoint.replaceFirst(RegExp(r'/+
+      final base = sessionEndpoint.endsWith('/')
+          ? sessionEndpoint.substring(0, sessionEndpoint.length - 1)
+          : sessionEndpoint;
+      final response = await http.post(
+        Uri.parse(base + '/api/devices/pairing-code'),
+        headers: {'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json'},
+        body: jsonEncode({'device_label': 'ULTRON Desktop'}),
+      );
+      if (response.statusCode != 200) {
+        throw Exception('Pairing request failed (' + response.statusCode.toString() + ').');
+      }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('PAIR ULTRON DESKTOP'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Enter this one-time code in ULTRON Desktop. It expires in 5 minutes.'),
+            const SizedBox(height: 18),
+            SelectableText(data['code'] as String? ?? '------',
+              style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900, letterSpacing: 5)),
+          ]),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('CLOSE'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
+  Future<void> toggleVoice() async {
+    if (connected) {
       await voice?.disconnect();
       if (mounted) setState(() => connected = false);
       return;
