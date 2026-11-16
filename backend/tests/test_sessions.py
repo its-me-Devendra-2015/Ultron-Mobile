@@ -55,7 +55,7 @@ def test_pairing_is_one_time_and_device_can_be_revoked(tmp_path, monkeypatch):
     paired = _pair(client, "alice", "Desktop")
     token = paired["device_token"]
     assert token.startswith("udv_")
-    assert client.post("/api/devices/pair", json={"code": "not-a-valid-code"}).status_code == 401
+    assert client.post("/api/devices/pair", json={"code": "BADCODE1"}).status_code == 401
 
     headers = {"Authorization": f"Bearer {token}"}
     session = client.post("/api/sessions", headers=headers, json={"title": "From desktop"})
