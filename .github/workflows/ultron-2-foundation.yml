@@ -1,0 +1,22 @@
+name: ULTRON 2.0 Foundation
+
+on:
+  push:
+    branches: [feature/ultron-2-foundation]
+  pull_request:
+    branches: [main]
+
+jobs:
+  flutter-protocol-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install Flutter dependencies
+        working-directory: mobile
+        run: flutter pub get
+      - name: Run protocol tests
+        working-directory: mobile
+        run: flutter test test/core/ultron_protocol_test.dart
