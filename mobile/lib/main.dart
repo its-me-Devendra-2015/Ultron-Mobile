@@ -1,9 +1,13 @@
+import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'services/livekit_voice_service.dart';
 
 const tokenEndpoint = String.fromEnvironment('ULTRON_TOKEN_ENDPOINT');
+const sessionEndpoint = String.fromEnvironment('ULTRON_SESSION_ENDPOINT');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -149,6 +153,142 @@ class _VoiceScreenState extends State<VoiceScreen> {
   bool connecting = false;
   bool connected = false;
   String? error;
+
+  Future<void> pairDesktop() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    if (sessionEndpoint.isEmpty) {
+      setState(() => error = 'Missing ULTRON_SESSION_ENDPOINT build setting.');
+      return;
+    }
+    setState(() { error = null; });
+    try {
+      final idToken = await user.getIdToken(true);
+      if (idToken == null || idToken.isEmpty) {
+        throw StateError('Could not obtain a Firebase sign-in token.');
+      }
+      final base = sessionEndpoint.replaceFirst(RegExp(r'/+
+      await voice?.disconnect();
+      if (mounted) setState(() => connected = false);
+      return;
+    }
+    if (tokenEndpoint.isEmpty) {
+      setState(() => error = 'Missing ULTRON_TOKEN_ENDPOINT build setting.');
+      return;
+    }
+    setState(() { connecting = true; error = null; });
+    try {
+      voice ??= UltronLiveKitVoiceService(tokenEndpoint: Uri.parse(tokenEndpoint));
+      await voice!.connect();
+      if (mounted) setState(() => connected = true);
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => connecting = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    voice?.disconnect();
+    voice?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('ULTRON // MOBILE'),
+        actions: [IconButton(
+          tooltip: 'Sign out',
+          onPressed: () async {
+            await voice?.disconnect();
+            await FirebaseAuth.instance.signOut();
+          },
+          icon: const Icon(Icons.logout),
+        )],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.memory, size: 76, color: Color(0xFFEF233C)),
+              const SizedBox(height: 20),
+              const Text('VOICE LINK', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 3)),
+              const SizedBox(height: 8),
+              Text(user?.email ?? 'Authenticated', style: const TextStyle(color: Colors.white54)),
+              const SizedBox(height: 40),
+              Icon(
+                connected ? Icons.graphic_eq : Icons.mic_none,
+                size: 92,
+                color: connected ? Colors.greenAccent : const Color(0xFFEF233C),
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: connecting ? null : toggleVoice,
+                icon: Icon(connected ? Icons.call_end : Icons.mic),
+                label: Text(connecting ? 'CONNECTING…' : connected ? 'END VOICE SESSION' : 'START VOICE SESSION'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: connecting ? null : pairDesktop,
+                icon: const Icon(Icons.devices),
+                label: const Text('PAIR DESKTOP'),
+              ),
+              const SizedBox(height: 16),
+              Text(connected ? 'LIVEKIT CONNECTED' : 'STANDBY',
+                  style: TextStyle(color: connected ? Colors.greenAccent : Colors.white54, letterSpacing: 2)),
+              if (error != null) ...[
+                const SizedBox(height: 20),
+                Text(error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+), '');
+      final response = await http.post(
+        Uri.parse('$base/api/devices/pairing-code'),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'device_label': 'ULTRON Desktop'}),
+      );
+      if (response.statusCode != 200) {
+        throw Exception('Pairing request failed (${response.statusCode}).');
+      }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('PAIR ULTRON DESKTOP'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter this one-time code in ULTRON Desktop. It expires in 5 minutes.'),
+              const SizedBox(height: 18),
+              SelectableText(
+                data['code'] as String? ?? '------',
+                style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900, letterSpacing: 5),
+              ),
+            ],
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('CLOSE'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
 
   Future<void> toggleVoice() async {
     if (connected) {
