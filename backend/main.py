@@ -11,7 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from livekit import api
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="ULTRON LiveKit Token Service", version="1.0.0")
+app = FastAPI(title="ULTRON LiveKit Token Service", version="1.1.0")
+
+from session_service import build_session_router
+
 
 # Explicit origins only. Set CORS_ALLOWED_ORIGINS to a comma-separated allowlist.
 origins = [item.strip() for item in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if item.strip()]
@@ -66,6 +69,9 @@ def required_env(name: str) -> str:
     if not value:
         raise HTTPException(status_code=503, detail=f"Server is missing {name} configuration")
     return value
+
+
+app.include_router(build_session_router(require_firebase_user))
 
 
 @app.get("/health")
