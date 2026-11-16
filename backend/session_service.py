@@ -51,7 +51,7 @@ def _db() -> sqlite3.Connection:
         expires_at TEXT NOT NULL, created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS devices(
-        token_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
+        device_id TEXT NOT NULL UNIQUE, token_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
         name TEXT NOT NULL, created_at TEXT NOT NULL,
         last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0
       );
@@ -155,12 +155,13 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
                 raise HTTPException(status_code=401, detail="Pairing code is invalid or expired")
             db.execute("DELETE FROM pairing_codes WHERE code_hash=?", (_digest(request.code.strip().upper()),))
             token = "udv_" + secrets.token_urlsafe(32)
+            device_id = str(uuid.uuid4())
             db.execute(
-                "INSERT INTO devices(token_hash,owner_uid,name,created_at) VALUES(?,?,?,?)",
-                (_digest(token), row["owner_uid"], request.device_label.strip(), now),
+                "INSERT INTO devices(device_id,token_hash,owner_uid,name,created_at) VALUES(?,?,?,?,?)",
+                (device_id, _digest(token), row["owner_uid"], request.device_label.strip(), now),
             )
             db.commit()
-            return {"device_token": token, "owner_uid": row["owner_uid"], "token_type": "Bearer"}
+            return {"device_id": device_id, "device_token": token, "owner_uid": row["owner_uid"], "token_type": "Bearer"}
         finally:
             db.close()
 
@@ -169,7 +170,7 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         db = _db()
         try:
             rows = db.execute(
-                "SELECT name,created_at,last_used_at,revoked FROM devices WHERE owner_uid=? ORDER BY created_at DESC",
+                "SELECT device_id,name,created_at,last_used_at,revoked FROM devices WHERE owner_uid=? ORDER BY created_at DESC",
                 (str(user.get("uid", "")),),
             ).fetchall()
             return {"devices": [dict(row) for row in rows]}
@@ -274,10 +275,19 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         finally:
             db.close()
 
-    @router.delete("/api/devices/{device_name}")
-    def revoke_device(device_name: str, user: dict = Depends(require_firebase_user)):
-        # Revocation by display name is intentionally not supported because names
-        # are not unique; use the device-management endpoint in the next iteration.
-        raise HTTPException(status_code=501, detail="Device revocation by stable ID is not available yet")
+    @router.delete("/api/devices/{device_id}")
+    def revoke_device(device_id: str, user: dict = Depends(require_firebase_user)):
+        db = _db()
+        try:
+            result = db.execute(
+                "UPDATE devices SET revoked=1 WHERE device_id=? AND owner_uid=?",
+                (device_id, str(user.get("uid", ""))),
+            )
+            db.commit()
+            if result.rowcount != 1:
+                raise HTTPException(status_code=404, detail="Device not found")
+            return {"revoked": True, "device_id": device_id}
+        finally:
+            db.close()
 
     return router
