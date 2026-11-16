@@ -1,0 +1,4 @@
+ultron_sessions.sqlite3
+__pycache__/
+.pytest_cache/
+*.py[cod]
