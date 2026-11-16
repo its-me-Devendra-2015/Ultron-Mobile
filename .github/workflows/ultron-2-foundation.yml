@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt httpx
+        run: pip install -r backend/requirements.txt httpx pytest
       - name: Run authenticated session tests
         working-directory: backend
         run: pytest -q tests/test_sessions.py
