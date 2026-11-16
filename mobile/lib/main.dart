@@ -178,7 +178,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
     }
     setState(() { connecting = true; error = null; });
     try {
-      voice ??= UltronLiveKitVoiceService(tokenEndpoint: Uri.parse(tokenEndpoint));
+      voice ??= UltronLiveKitVoiceService(
+        tokenEndpoint: Uri.parse(tokenEndpoint),
+        sessionEndpoint: sessionEndpoint.isEmpty ? null : Uri.parse(sessionEndpoint),
+      );
       await voice!.connect();
       if (mounted) setState(() => connected = true);
     } catch (e) {
