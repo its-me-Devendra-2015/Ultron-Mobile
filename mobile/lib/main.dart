@@ -181,8 +181,8 @@ class _VoiceScreenState extends State<VoiceScreen> {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (!mounted) return;
       await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
+        context,
+        (context) => AlertDialog(
           title: const Text('PAIR ULTRON DESKTOP'),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             const Text('Enter this one-time code in ULTRON Desktop. It expires in 5 minutes.'),
