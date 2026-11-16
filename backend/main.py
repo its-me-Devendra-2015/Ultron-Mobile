@@ -23,7 +23,7 @@ if origins:
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=False,
-        allow_methods=["POST", "GET"],
+        allow_methods=["POST", "GET", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
