@@ -1,0 +1,44 @@
+name: ULTRON 2.0 Foundation
+
+on:
+  push:
+    branches: [feature/ultron-2-foundation]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-session-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt httpx pytest
+      - name: Run authenticated session tests
+        working-directory: backend
+        run: pytest -q tests/test_sessions.py
+      - name: Compile backend
+        working-directory: backend
+        run: python -m compileall -q main.py session_service.py
+
+  flutter-analysis-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install Flutter dependencies
+        working-directory: mobile
+        run: flutter pub get
+      - name: Analyze Flutter sources
+        working-directory: mobile
+        run: flutter analyze --no-fatal-infos
+      - name: Run Flutter tests
+        working-directory: mobile
+        run: flutter test

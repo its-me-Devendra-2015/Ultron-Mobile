@@ -10,16 +10,19 @@ import 'package:livekit_client/livekit_client.dart' as lk;
 class UltronLiveKitVoiceService {
   UltronLiveKitVoiceService({
     required this.tokenEndpoint,
+    this.sessionEndpoint,
     FirebaseAuth? firebaseAuth,
     http.Client? httpClient,
   })  : _auth = firebaseAuth ?? FirebaseAuth.instance,
         _http = httpClient ?? http.Client();
 
   final Uri tokenEndpoint;
+  final Uri? sessionEndpoint;
   final FirebaseAuth _auth;
   final http.Client _http;
 
   lk.Room? _room;
+  String? _sessionId;
   lk.Room? get room => _room;
 
   Future<lk.Room> connect({String? sessionId}) async {
@@ -33,6 +36,7 @@ class UltronLiveKitVoiceService {
       throw StateError('Could not obtain a Firebase sign-in token.');
     }
 
+    final activeSessionId = sessionId ?? _newSessionId();
     final response = await _http.post(
       tokenEndpoint,
       headers: {
@@ -40,7 +44,7 @@ class UltronLiveKitVoiceService {
         'Content-Type': 'application/json',
       },
       body: jsonEncode({
-        'session_id': sessionId ?? _newSessionId(),
+        'session_id': activeSessionId,
       }),
     );
 
@@ -60,15 +64,54 @@ class UltronLiveKitVoiceService {
     await room.connect(serverUrl, participantToken);
     await room.localParticipant?.setMicrophoneEnabled(true);
     _room = room;
+    _sessionId = activeSessionId;
+    await _recordSessionEvent('session.started', {'transport': 'livekit'});
     return room;
   }
 
   Future<void> disconnect() async {
     final activeRoom = _room;
+    await _recordSessionEvent('session.ended', {'transport': 'livekit'});
+    _sessionId = null;
     _room = null;
     if (activeRoom != null) {
       await activeRoom.disconnect();
       await activeRoom.dispose();
+    }
+  }
+
+  Future<void> _recordSessionEvent(String eventType, Map<String, dynamic> payload) async {
+    final endpoint = sessionEndpoint;
+    final session = _sessionId;
+    final user = _auth.currentUser;
+    if (endpoint == null || session == null || user == null) return;
+    try {
+      final idToken = await user.getIdToken(true);
+      if (idToken == null || idToken.isEmpty) return;
+      final headers = {'Authorization': 'Bearer $idToken', 'Content-Type': 'application/json'};
+      if (eventType == 'session.started') {
+        final created = await _http.post(
+          endpoint.resolve('/api/sessions'),
+          headers: headers,
+          body: jsonEncode({'session_id': session, 'title': 'ULTRON Voice Session'}),
+        );
+        if (created.statusCode != 200) return;
+      }
+      await _http.post(
+        endpoint.resolve('/api/sessions/$session/events'),
+        headers: headers,
+        body: jsonEncode({
+          'protocol_version': '1.0',
+          'event_id': _newSessionId(),
+          'session_id': session,
+          'event_type': eventType,
+          'occurred_at': DateTime.now().toUtc().toIso8601String(),
+          'source': 'mobile',
+          'payload': payload,
+        }),
+      );
+    } catch (_) {
+      // Session sync is best-effort and must never break the existing LiveKit call.
     }
   }
 
