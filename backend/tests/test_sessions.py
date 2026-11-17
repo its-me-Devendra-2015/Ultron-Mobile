@@ -27,6 +27,14 @@ def _pair(client, owner, label):
 
 def test_authenticated_session_event_and_owner_isolation(tmp_path, monkeypatch):
     monkeypatch.setattr(session_service, "DB_PATH", tmp_path / "sessions.sqlite3")
+    # principal() calls the verifier directly for Firebase principals; stub the
+    # verifier itself as well as FastAPI's dependency for the route-level checks.
+    monkeypatch.setattr(main, "firebase_app", lambda: None)
+    monkeypatch.setattr(
+        main.firebase_auth,
+        "verify_id_token",
+        lambda raw_token, check_revoked=True: {"uid": "alice"},
+    )
     client = TestClient(main.app)
     assert client.get("/api/sessions").status_code == 401
 
