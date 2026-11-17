@@ -50,7 +50,7 @@ void main() {
 
     final events = await api.readEvents('11111111-1111-4111-8111-111111111111');
     expect(events.single['payload']['text'], 'Hello from desktop');
-    expect(() => api.readEvents('session', limit: 501), throwsArgumentError);
+    await expectLater(api.readEvents('session', limit: 501), throwsArgumentError);
     api.dispose();
   });
 

@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -53,6 +54,7 @@ def test_authenticated_session_event_and_owner_isolation(tmp_path, monkeypatch):
     bob = _pair(client, "bob", "Bob desktop")
     bob_headers = {"Authorization": f"Bearer {bob['device_token']}"}
     assert client.get(f"/api/sessions/{sid}/events", headers=bob_headers).status_code == 404
+    assert client.get(f"/api/sessions/{sid}", headers=bob_headers).status_code == 404
     assert client.post("/api/sessions", headers=bob_headers, json={"session_id": sid}).status_code == 409
     main.app.dependency_overrides.clear()
 
@@ -132,3 +134,38 @@ def test_event_timestamps_must_include_a_timezone(tmp_path, monkeypatch):
     )
     assert response.status_code == 422
     main.app.dependency_overrides.clear()
+
+def test_existing_database_schema_is_migrated_in_place(tmp_path, monkeypatch):
+    database = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.executescript("""
+      CREATE TABLE sessions(
+        id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, title TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE events(
+        event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+        owner_uid TEXT NOT NULL, event_type TEXT NOT NULL, source TEXT NOT NULL,
+        occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL
+      );
+      CREATE TABLE pairing_codes(
+        code_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE devices(
+        device_id TEXT NOT NULL UNIQUE, token_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
+        name TEXT NOT NULL, created_at TEXT NOT NULL,
+        last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0
+      );
+    """)
+    connection.close()
+    monkeypatch.setattr(session_service, "DB_PATH", database)
+
+    migrated = session_service._db()
+    try:
+        event_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(events)")}
+        pairing_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(pairing_codes)")}
+        assert "request_id" in event_columns
+        assert "session_id" in pairing_columns
+    finally:
+        migrated.close()

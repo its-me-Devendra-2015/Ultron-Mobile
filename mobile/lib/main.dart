@@ -245,7 +245,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
                           ? Map<String, dynamic>.from(rawPayload)
                           : const <String, dynamic>{};
                       final message = payload['text']?.toString() ??
-                          payload.entries.map((entry) => '${entry.key}: ${entry.value}').join('\\n');
+                          payload.entries.map((entry) => '${entry.key}: ${entry.value}').join('\n');
                       return ListTile(
                         dense: true,
                         title: Text(type.toUpperCase()),
