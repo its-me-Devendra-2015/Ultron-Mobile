@@ -86,7 +86,7 @@ class SharedSessionApi {
         .toList(growable: false);
   }
 
-  Future<Map<String, dynamic>> revokeDevice(String deviceId) {
+  Future<Map<String, dynamic>> revokeDevice(String deviceId) async {
     if (deviceId.trim().isEmpty) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Must not be empty');
     }
