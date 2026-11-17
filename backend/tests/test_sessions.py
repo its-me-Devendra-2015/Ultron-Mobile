@@ -96,7 +96,11 @@ def test_pairing_is_one_time_and_device_can_be_revoked(tmp_path, monkeypatch):
     assert client.post("/api/devices/pair", json={"code": "BADCODE1"}).status_code == 401
 
     headers = {"Authorization": f"Bearer {token}"}
-    session = client.post("/api/sessions", headers=headers, json={"title": "From desktop"})
+    session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"session_id": paired["session_id"], "title": "From desktop"},
+    )
     assert session.status_code == 200
     assert client.get("/api/sessions", headers=headers).json()["sessions"][0]["title"] == "From desktop"
 
