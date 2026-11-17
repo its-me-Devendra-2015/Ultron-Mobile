@@ -34,3 +34,10 @@ Start pairing:
 ## Verification
 
 The backend tests cover unauthenticated rejection, owner isolation, one-time pairing, session event persistence, and device revocation. The desktop tests cover pairing persistence and the unpaired no-op path.
+
+
+## Shared session continuity (Module 2)
+
+A mobile pairing-code request creates an owner-scoped shared session and returns its session_id. The one-time desktop exchange returns that same ID with the revocable device credential. Desktop chat events and mobile LiveKit voice lifecycle events are appended to this shared session. Mobile can reload the latest owned session and read its event history after signing in again.
+
+Session creation is idempotent for the same owner and ID. Event timestamps must include a timezone; optional request_id correlation values are persisted and returned. Existing SQLite databases are upgraded in place with the new event and pairing columns.

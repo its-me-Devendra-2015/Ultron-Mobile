@@ -42,12 +42,12 @@ def _db() -> sqlite3.Connection:
       CREATE TABLE IF NOT EXISTS events(
         event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
         owner_uid TEXT NOT NULL, event_type TEXT NOT NULL, source TEXT NOT NULL,
-        occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL,
+        request_id TEXT, occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, occurred_at);
       CREATE TABLE IF NOT EXISTS pairing_codes(
-        code_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
+        code_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, session_id TEXT,
         expires_at TEXT NOT NULL, created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS devices(
@@ -56,6 +56,16 @@ def _db() -> sqlite3.Connection:
         last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0
       );
     """)
+    # Upgrade databases created by the initial session-sync release in place.
+    migrations = {
+        "events": {"request_id": "TEXT"},
+        "pairing_codes": {"session_id": "TEXT"},
+    }
+    for table, columns_to_add in migrations.items():
+        existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+        for column, declaration in columns_to_add.items():
+            if column not in existing:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
     return db
 
 
@@ -89,6 +99,7 @@ class EventCreate(BaseModel):
     occurred_at: str
     source: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRouter:
@@ -129,39 +140,67 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         if not uid:
             raise HTTPException(status_code=401, detail="Authenticated user has no UID")
         code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8].upper()
+        session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
         db = _db()
         try:
-            db.execute("DELETE FROM pairing_codes WHERE expires_at < ?", (now.isoformat(),))
+            # Keep only one active code per account and create its shared session atomically.
+            db.execute("DELETE FROM pairing_codes WHERE owner_uid=? OR expires_at < ?", (uid, now_iso))
             db.execute(
-                "INSERT INTO pairing_codes(code_hash,owner_uid,expires_at,created_at) VALUES(?,?,?,?)",
-                (_digest(code), uid, (now + timedelta(minutes=5)).isoformat(), now.isoformat()),
+                "INSERT INTO sessions(id,owner_uid,title,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (session_id, uid, "ULTRON shared session", now_iso, now_iso),
+            )
+            db.execute(
+                "INSERT INTO pairing_codes(code_hash,owner_uid,session_id,expires_at,created_at) VALUES(?,?,?,?,?)",
+                (_digest(code), uid, session_id, (now + timedelta(minutes=5)).isoformat(), now_iso),
             )
             db.commit()
         finally:
             db.close()
-        return {"code": code, "expires_in_seconds": 300, "device_label": request.device_label}
+        return {
+            "code": code,
+            "session_id": session_id,
+            "expires_in_seconds": 300,
+            "device_label": request.device_label,
+        }
 
     @router.post("/api/devices/pair")
     def exchange_pairing_code(request: PairExchangeRequest):
         now = _now()
         db = _db()
         try:
+            code_hash = _digest(request.code.strip().upper())
             row = db.execute(
-                "SELECT owner_uid, expires_at FROM pairing_codes WHERE code_hash=?",
-                (_digest(request.code.strip().upper()),),
+                "SELECT owner_uid, session_id, expires_at FROM pairing_codes WHERE code_hash=?",
+                (code_hash,),
             ).fetchone()
             if not row or row["expires_at"] < now:
                 raise HTTPException(status_code=401, detail="Pairing code is invalid or expired")
-            db.execute("DELETE FROM pairing_codes WHERE code_hash=?", (_digest(request.code.strip().upper()),))
+            db.execute("DELETE FROM pairing_codes WHERE code_hash=?", (code_hash,))
             token = "udv_" + secrets.token_urlsafe(32)
             device_id = str(uuid.uuid4())
+            session_id = row["session_id"] or str(uuid.uuid4())
+            existing = db.execute("SELECT owner_uid FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if existing and existing["owner_uid"] != row["owner_uid"]:
+                raise HTTPException(status_code=409, detail="Shared session is not owned by this account")
+            if not existing:
+                db.execute(
+                    "INSERT INTO sessions(id,owner_uid,title,created_at,updated_at) VALUES(?,?,?,?,?)",
+                    (session_id, row["owner_uid"], "ULTRON shared session", now, now),
+                )
             db.execute(
                 "INSERT INTO devices(device_id,token_hash,owner_uid,name,created_at) VALUES(?,?,?,?,?)",
                 (device_id, _digest(token), row["owner_uid"], request.device_label.strip(), now),
             )
             db.commit()
-            return {"device_id": device_id, "device_token": token, "owner_uid": row["owner_uid"], "token_type": "Bearer"}
+            return {
+                "device_id": device_id,
+                "device_token": token,
+                "owner_uid": row["owner_uid"],
+                "session_id": session_id,
+                "token_type": "Bearer",
+            }
         finally:
             db.close()
 
@@ -189,6 +228,19 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         now = _now()
         db = _db()
         try:
+            existing = db.execute(
+                "SELECT owner_uid,title,created_at,updated_at FROM sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if existing:
+                if existing["owner_uid"] != uid:
+                    raise HTTPException(status_code=409, detail="Session ID is already in use")
+                return {
+                    "session_id": session_id,
+                    "title": existing["title"],
+                    "created_at": existing["created_at"],
+                    "updated_at": existing["updated_at"],
+                }
             db.execute(
                 "INSERT INTO sessions(id,owner_uid,title,created_at,updated_at) VALUES(?,?,?,?,?)",
                 (session_id, uid, request.title.strip() or "ULTRON session", now, now),
@@ -198,7 +250,7 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             raise HTTPException(status_code=409, detail="Session already exists")
         finally:
             db.close()
-        return {"session_id": session_id, "title": request.title, "created_at": now}
+        return {"session_id": session_id, "title": request.title.strip() or "ULTRON session", "created_at": now, "updated_at": now}
 
     @router.get("/api/sessions")
     def list_sessions(user: dict = Depends(principal)):
@@ -212,6 +264,24 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         finally:
             db.close()
 
+    @router.get("/api/sessions/{session_id}")
+    def get_session(session_id: str, user: dict = Depends(principal)):
+        try:
+            normalized_id = str(uuid.UUID(session_id))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="session_id must be a UUID")
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT id AS session_id,title,created_at,updated_at FROM sessions WHERE id=? AND owner_uid=?",
+                (normalized_id, str(user.get("uid", ""))),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            return dict(row)
+        finally:
+            db.close()
+
     @router.post("/api/sessions/{session_id}/events", status_code=201)
     def append_event(session_id: str, request: EventCreate, user: dict = Depends(principal)):
         uid = str(user.get("uid", ""))
@@ -220,6 +290,8 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             uuid.UUID(request.event_id)
             uuid.UUID(request.session_id)
             parsed = datetime.fromisoformat(request.occurred_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError("Timestamp must include a timezone")
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="Invalid session, event ID, or timestamp")
         if request.protocol_version != "1.0":
@@ -238,8 +310,8 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             if not owned:
                 raise HTTPException(status_code=404, detail="Session not found")
             db.execute(
-                "INSERT INTO events(event_id,session_id,owner_uid,event_type,source,occurred_at,payload_json) VALUES(?,?,?,?,?,?,?)",
-                (request.event_id, session_id, uid, request.event_type, request.source,
+                "INSERT INTO events(event_id,session_id,owner_uid,event_type,source,request_id,occurred_at,payload_json) VALUES(?,?,?,?,?,?,?,?)",
+                (request.event_id, session_id, uid, request.event_type, request.source, request.request_id,
                  parsed.astimezone(timezone.utc).isoformat(), json.dumps(request.payload, ensure_ascii=False)),
             )
             db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (_now(), session_id))
@@ -263,12 +335,13 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             if not owned:
                 raise HTTPException(status_code=404, detail="Session not found")
             rows = db.execute(
-                "SELECT event_id,session_id,event_type,source,occurred_at,payload_json FROM events WHERE session_id=? ORDER BY occurred_at,event_id LIMIT ?",
+                "SELECT event_id,session_id,event_type,source,request_id,occurred_at,payload_json FROM events WHERE session_id=? ORDER BY occurred_at,event_id LIMIT ?",
                 (session_id, limit),
             ).fetchall()
             return {"events": [
                 {"event_id": row["event_id"], "session_id": row["session_id"],
                  "event_type": row["event_type"], "source": row["source"],
+                 **({"request_id": row["request_id"]} if row["request_id"] else {}),
                  "occurred_at": row["occurred_at"], "payload": json.loads(row["payload_json"])}
                 for row in rows
             ]}

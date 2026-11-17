@@ -1,10 +1,8 @@
-import 'dart:convert';
-
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'services/livekit_voice_service.dart';
+import 'services/shared_session_api.dart';
 
 const tokenEndpoint = String.fromEnvironment('ULTRON_TOKEN_ENDPOINT');
 const sessionEndpoint = String.fromEnvironment('ULTRON_SESSION_ENDPOINT');
@@ -152,49 +150,117 @@ class _VoiceScreenState extends State<VoiceScreen> {
   UltronLiveKitVoiceService? voice;
   bool connecting = false;
   bool connected = false;
+  bool loadingHistory = false;
   String? error;
+  String? pairedSessionId;
+  SharedSessionApi? sessionApi;
+
+  @override
+  void initState() {
+    super.initState();
+    if (sessionEndpoint.isNotEmpty) {
+      sessionApi = SharedSessionApi(
+        baseUri: Uri.parse(sessionEndpoint),
+        tokenProvider: () async => FirebaseAuth.instance.currentUser?.getIdToken(true),
+      );
+      _loadLatestSession();
+    }
+  }
+
+  Future<void> _loadLatestSession() async {
+    try {
+      final sessions = await sessionApi?.listSessions();
+      if (!mounted || sessions == null || sessions.isEmpty) return;
+      final id = sessions.first['session_id'];
+      if (id is String) setState(() => pairedSessionId = id);
+    } catch (_) {
+      // The voice screen remains usable if shared-session history is unavailable.
+    }
+  }
 
   Future<void> pairDesktop() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    if (sessionEndpoint.isEmpty) {
+    final api = sessionApi;
+    if (api == null) {
       setState(() => error = 'Missing ULTRON_SESSION_ENDPOINT build setting.');
       return;
     }
     setState(() { error = null; });
     try {
-      final idToken = await user.getIdToken(true);
-      if (idToken == null || idToken.isEmpty) {
-        throw StateError('Could not obtain a Firebase sign-in token.');
+      final data = await api.createPairingCode();
+      final code = data['code'];
+      final sessionId = data['session_id'];
+      if (code is! String || sessionId is! String) {
+        throw const FormatException('The session service returned an incomplete pairing response.');
       }
-      final base = sessionEndpoint.endsWith('/')
-          ? sessionEndpoint.substring(0, sessionEndpoint.length - 1)
-          : sessionEndpoint;
-      final response = await http.post(
-        Uri.parse(base + '/api/devices/pairing-code'),
-        headers: {'Authorization': 'Bearer ' + idToken, 'Content-Type': 'application/json'},
-        body: jsonEncode({'device_label': 'ULTRON Desktop'}),
-      );
-      if (response.statusCode != 200) {
-        throw Exception('Pairing request failed (' + response.statusCode.toString() + ').');
-      }
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (!mounted) return;
+      setState(() => pairedSessionId = sessionId);
       await showDialog<void>(
-        context,
-        (context) => AlertDialog(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
           title: const Text('PAIR ULTRON DESKTOP'),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             const Text('Enter this one-time code in ULTRON Desktop. It expires in 5 minutes.'),
             const SizedBox(height: 18),
-            SelectableText(data['code'] as String? ?? '------',
+            SelectableText(code,
               style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900, letterSpacing: 5)),
+            const SizedBox(height: 12),
+            Text('Shared session: ${sessionId.substring(0, 8)}'),
           ]),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('CLOSE'))],
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('CLOSE'))],
         ),
       );
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
+    }
+  }
+
+  Future<void> showSharedHistory() async {
+    final api = sessionApi;
+    final sessionId = pairedSessionId;
+    if (api == null || sessionId == null) {
+      setState(() => error = 'Pair ULTRON Desktop or create a voice session first.');
+      return;
+    }
+    setState(() { loadingHistory = true; error = null; });
+    try {
+      final events = await api.readEvents(sessionId);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('ULTRON SHARED SESSION'),
+          content: SizedBox(
+            width: 440,
+            height: 420,
+            child: events.isEmpty
+                ? const Center(child: Text('No shared events yet.'))
+                : ListView.separated(
+                    itemCount: events.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final event = events[index];
+                      final type = event['event_type']?.toString() ?? 'event';
+                      final rawPayload = event['payload'];
+                      final payload = rawPayload is Map
+                          ? Map<String, dynamic>.from(rawPayload)
+                          : const <String, dynamic>{};
+                      final message = payload['text']?.toString() ??
+                          payload.entries.map((entry) => '${entry.key}: ${entry.value}').join('\\n');
+                      return ListTile(
+                        dense: true,
+                        title: Text(type.toUpperCase()),
+                        subtitle: Text(message.isEmpty ? '—' : message),
+                      );
+                    },
+                  ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('CLOSE'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => loadingHistory = false);
     }
   }
 
@@ -214,7 +280,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
         tokenEndpoint: Uri.parse(tokenEndpoint),
         sessionEndpoint: sessionEndpoint.isEmpty ? null : Uri.parse(sessionEndpoint),
       );
-      await voice!.connect();
+      await voice!.connect(sessionId: pairedSessionId);
       if (mounted) setState(() => connected = true);
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
@@ -227,6 +293,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
   void dispose() {
     voice?.disconnect();
     voice?.dispose();
+    sessionApi?.dispose();
     super.dispose();
   }
 
@@ -273,6 +340,19 @@ class _VoiceScreenState extends State<VoiceScreen> {
                 icon: const Icon(Icons.devices),
                 label: const Text('PAIR DESKTOP'),
               ),
+              if (pairedSessionId != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'SHARED SESSION · ${pairedSessionId!.substring(0, 8)}',
+                  style: const TextStyle(color: Colors.white54, letterSpacing: 1),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: loadingHistory ? null : showSharedHistory,
+                  icon: const Icon(Icons.forum_outlined),
+                  label: Text(loadingHistory ? 'LOADING HISTORY…' : 'VIEW SHARED HISTORY'),
+                ),
+              ],
               const SizedBox(height: 16),
               Text(connected ? 'LIVEKIT CONNECTED' : 'STANDBY',
                 style: TextStyle(color: connected ? Colors.greenAccent : Colors.white54, letterSpacing: 2)),
