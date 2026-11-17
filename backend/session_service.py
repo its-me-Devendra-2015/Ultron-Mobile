@@ -179,6 +179,9 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         now = _now()
         db = _db()
         try:
+            # Serialize exchanges so two simultaneous requests cannot consume the
+            # same one-time code and mint two independent device credentials.
+            db.execute("BEGIN IMMEDIATE")
             code_hash = _digest(request.code.strip().upper())
             row = db.execute(
                 "SELECT owner_uid, session_id, expires_at FROM pairing_codes WHERE code_hash=?",
@@ -186,7 +189,12 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             ).fetchone()
             if not row or row["expires_at"] < now:
                 raise HTTPException(status_code=401, detail="Pairing code is invalid or expired")
-            db.execute("DELETE FROM pairing_codes WHERE code_hash=?", (code_hash,))
+            consumed = db.execute(
+                "DELETE FROM pairing_codes WHERE code_hash=? AND expires_at>=?",
+                (code_hash, now),
+            )
+            if consumed.rowcount != 1:
+                raise HTTPException(status_code=401, detail="Pairing code is invalid or expired")
             token = "udv_" + secrets.token_urlsafe(32)
             device_id = str(uuid.uuid4())
             session_id = row["session_id"] or str(uuid.uuid4())
@@ -198,9 +206,10 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
                     "INSERT INTO sessions(id,owner_uid,title,created_at,updated_at) VALUES(?,?,?,?,?)",
                     (session_id, row["owner_uid"], "ULTRON shared session", now, now),
                 )
+            device_label = request.device_label.strip() or "ULTRON Desktop"
             db.execute(
                 "INSERT INTO devices(device_id,token_hash,owner_uid,session_id,name,created_at) VALUES(?,?,?,?,?,?)",
-                (device_id, _digest(token), row["owner_uid"], session_id, request.device_label.strip(), now),
+                (device_id, _digest(token), row["owner_uid"], session_id, device_label, now),
             )
             db.commit()
             return {
@@ -210,6 +219,9 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
                 "session_id": session_id,
                 "token_type": "Bearer",
             }
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -317,8 +329,12 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
         if request.session_id != session_id:
             raise HTTPException(status_code=422, detail="Event session_id does not match route")
         assert_device_session(user, session_id)
-        if user.get("principal_type") == "device" and request.source != "desktop":
-            raise HTTPException(status_code=403, detail="Paired desktop devices may only append desktop events")
+        expected_source = "desktop" if user.get("principal_type") == "device" else "mobile"
+        if request.source != expected_source:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Authenticated clients may only append {expected_source} events",
+            )
         if request.event_type not in EVENT_TYPES or request.source not in SOURCES:
             raise HTTPException(status_code=422, detail="Unsupported event type or source")
         if len(json.dumps(request.payload, ensure_ascii=False)) > 32768:

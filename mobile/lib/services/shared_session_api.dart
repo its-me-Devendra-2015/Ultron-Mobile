@@ -42,13 +42,18 @@ class SharedSessionApi {
       'Authorization': 'Bearer $token',
       'Content-Type': 'application/json',
     };
-    final response = method == 'GET'
-        ? await _http.get(_uri(path), headers: headers)
-        : await _http.post(
-            _uri(path),
-            headers: headers,
-            body: jsonEncode(body ?? const <String, dynamic>{}),
-          );
+    late final http.Response response;
+    if (method == 'GET') {
+      response = await _http.get(_uri(path), headers: headers);
+    } else if (method == 'DELETE') {
+      response = await _http.delete(_uri(path), headers: headers);
+    } else {
+      response = await _http.post(
+        _uri(path),
+        headers: headers,
+        body: jsonEncode(body ?? const <String, dynamic>{}),
+      );
+    }
 
     Map<String, dynamic> data = <String, dynamic>{};
     try {
@@ -70,6 +75,23 @@ class SharedSessionApi {
         '/api/devices/pairing-code',
         body: const {'device_label': 'ULTRON Desktop'},
       );
+
+  Future<List<Map<String, dynamic>>> listDevices() async {
+    final data = await _request('GET', '/api/devices');
+    final values = data['devices'];
+    if (values is! List) return const [];
+    return values
+        .whereType<Map>()
+        .map((value) => Map<String, dynamic>.from(value))
+        .toList(growable: false);
+  }
+
+  Future<Map<String, dynamic>> revokeDevice(String deviceId) {
+    if (deviceId.trim().isEmpty) {
+      throw ArgumentError.value(deviceId, 'deviceId', 'Must not be empty');
+    }
+    return _request('DELETE', '/api/devices/${Uri.encodeComponent(deviceId)}');
+  }
 
   Future<List<Map<String, dynamic>>> listSessions() async {
     final data = await _request('GET', '/api/sessions');

@@ -54,6 +54,35 @@ void main() {
     api.dispose();
   });
 
+  test('device listing and revocation use the authenticated Firebase account', () async {
+    final client = MockClient((request) async {
+      expect(request.headers['authorization'], 'Bearer firebase-test');
+      if (request.method == 'GET') {
+        expect(request.url.path, '/api/devices');
+        return http.Response(jsonEncode({
+          'devices': [
+            {'device_id': 'desktop-123', 'name': 'ULTRON Desktop', 'revoked': false},
+          ],
+        }), 200);
+      }
+      expect(request.method, 'DELETE');
+      expect(request.url.path, '/api/devices/desktop-123');
+      return http.Response(jsonEncode({'revoked': true, 'device_id': 'desktop-123'}), 200);
+    });
+    final api = SharedSessionApi(
+      baseUri: Uri.parse('https://example.test'),
+      tokenProvider: () async => 'firebase-test',
+      httpClient: client,
+    );
+
+    final devices = await api.listDevices();
+    expect(devices.single['name'], 'ULTRON Desktop');
+    final result = await api.revokeDevice('desktop-123');
+    expect(result['revoked'], true);
+    await expectLater(api.revokeDevice(' '), throwsArgumentError);
+    api.dispose();
+  });
+
   test('session API refuses requests without a Firebase token', () async {
     final api = SharedSessionApi(
       baseUri: Uri.parse('https://example.test'),

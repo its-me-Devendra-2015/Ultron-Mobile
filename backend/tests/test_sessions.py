@@ -1,6 +1,7 @@
 import sys
 import sqlite3
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -37,6 +38,7 @@ def test_authenticated_session_event_and_owner_isolation(tmp_path, monkeypatch):
     )
     client = TestClient(main.app)
     assert client.get("/api/sessions").status_code == 401
+    assert client.post("/api/devices/pairing-code", json={}).status_code == 401
 
     alice = _pair(client, "alice", "Alice desktop")
     headers = {"Authorization": f"Bearer {alice['device_token']}"}
@@ -57,7 +59,30 @@ def test_authenticated_session_event_and_owner_isolation(tmp_path, monkeypatch):
     assert saved_events[0]["request_id"] == "request-123"
 
     main.app.dependency_overrides[main.require_firebase_user] = lambda authorization=None: {"uid": "alice"}
-    assert client.get(f"/api/sessions/{sid}/events", headers={"Authorization": "Bearer firebase-test"}).status_code == 200
+    firebase_headers = {"Authorization": "Bearer firebase-test"}
+    mobile_event = {
+        "protocol_version": "1.0",
+        "event_id": str(uuid.uuid4()),
+        "session_id": sid,
+        "event_type": "message.assistant",
+        "occurred_at": "2026-11-17T12:00:00Z",
+        "source": "mobile",
+        "payload": {"text": "Hello from ULTRON Mobile"},
+    }
+    mobile_saved = client.post(f"/api/sessions/{sid}/events", headers=firebase_headers, json=mobile_event)
+    assert mobile_saved.status_code == 201
+    assert client.get(f"/api/sessions/{sid}/events", headers=headers).status_code == 200
+    shared_events = client.get(f"/api/sessions/{sid}/events", headers=headers).json()["events"]
+    assert any(item["event_id"] == mobile_event["event_id"] for item in shared_events)
+
+    spoofed_device_event = {**event, "event_id": str(uuid.uuid4()), "source": "mobile"}
+    assert client.post(
+        f"/api/sessions/{sid}/events", headers=headers, json=spoofed_device_event
+    ).status_code == 403
+    spoofed_mobile_event = {**mobile_event, "event_id": str(uuid.uuid4()), "source": "desktop"}
+    assert client.post(
+        f"/api/sessions/{sid}/events", headers=firebase_headers, json=spoofed_mobile_event
+    ).status_code == 403
 
     bob = _pair(client, "bob", "Bob desktop")
     bob_headers = {"Authorization": f"Bearer {bob['device_token']}"}
@@ -102,7 +127,9 @@ def test_pairing_is_one_time_and_device_can_be_revoked(tmp_path, monkeypatch):
         json={"session_id": paired["session_id"], "title": "From desktop"},
     )
     assert session.status_code == 200
-    assert client.get("/api/sessions", headers=headers).json()["sessions"][0]["title"] == "From desktop"
+    # Re-opening the already-created paired session is idempotent; the
+    # original owner-created title is retained rather than silently replaced.
+    assert client.get("/api/sessions", headers=headers).json()["sessions"][0]["title"] == "ULTRON shared session"
 
     main.app.dependency_overrides[main.require_firebase_user] = lambda authorization=None: {"uid": "alice"}
     revoked = client.delete(f"/api/devices/{paired['device_id']}", headers={"Authorization": "Bearer firebase-test"})
@@ -140,6 +167,34 @@ def test_pairing_code_is_single_use_and_returns_a_shared_session(tmp_path, monke
         sessions = client.get("/api/sessions", headers={"Authorization": f"Bearer {token}"})
         assert sessions.status_code == 200
         assert sessions.json()["sessions"][0]["session_id"] == session_id
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+
+def test_pairing_code_exchange_is_atomic_under_concurrent_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service, "DB_PATH", tmp_path / "sessions.sqlite3")
+    main.app.dependency_overrides[main.require_firebase_user] = lambda authorization=None: {"uid": "alice"}
+    try:
+        with TestClient(main.app) as client:
+            pairing = client.post(
+                "/api/devices/pairing-code",
+                headers={"Authorization": "Bearer firebase-test"},
+                json={"device_label": "ULTRON Desktop"},
+            )
+        code = pairing.json()["code"]
+
+        def exchange(_):
+            with TestClient(main.app) as client:
+                return client.post(
+                    "/api/devices/pair",
+                    json={"code": code, "device_label": "ULTRON Desktop"},
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(exchange, range(2)))
+
+        assert sorted(response.status_code for response in responses) == [200, 401]
     finally:
         main.app.dependency_overrides.clear()
 

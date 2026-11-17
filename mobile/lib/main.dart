@@ -267,6 +267,80 @@ class _VoiceScreenState extends State<VoiceScreen> {
     }
   }
 
+  Future<void> manageDevices() async {
+    final api = sessionApi;
+    if (api == null) {
+      setState(() => error = 'Missing ULTRON_SESSION_ENDPOINT build setting.');
+      return;
+    }
+    setState(() => error = null);
+    try {
+      final devices = (await api.listDevices())
+          .map((device) => Map<String, dynamic>.from(device))
+          .toList();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, updateDialog) => AlertDialog(
+            title: const Text('PAIRED DEVICES'),
+            content: SizedBox(
+              width: 440,
+              height: 360,
+              child: devices.isEmpty
+                  ? const Center(child: Text('No paired desktops yet.'))
+                  : ListView.separated(
+                      itemCount: devices.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final device = devices[index];
+                        final deviceId = device['device_id']?.toString() ?? '';
+                        final revoked = device['revoked'] == true;
+                        return ListTile(
+                          dense: true,
+                          title: Text(device['name']?.toString() ?? 'ULTRON device'),
+                          subtitle: Text(
+                            revoked
+                                ? 'Revoked'
+                                : 'Last used: ${device['last_used_at'] ?? 'Not yet used'}',
+                          ),
+                          trailing: revoked
+                              ? const Text('REVOKED')
+                              : TextButton(
+                                  onPressed: deviceId.isEmpty
+                                      ? null
+                                      : () async {
+                                          try {
+                                            await api.revokeDevice(deviceId);
+                                            updateDialog(() {
+                                              devices[index] = {...device, 'revoked': true};
+                                            });
+                                          } catch (e) {
+                                            if (mounted) {
+                                              setState(() => error = e.toString());
+                                            }
+                                          }
+                                        },
+                                  child: const Text('REVOKE'),
+                                ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('CLOSE'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
   Future<void> toggleVoice() async {
     if (connected) {
       await voice?.disconnect();
@@ -343,6 +417,12 @@ class _VoiceScreenState extends State<VoiceScreen> {
                 icon: const Icon(Icons.devices),
                 label: const Text('PAIR DESKTOP'),
               ),
+              if (sessionApi != null)
+                OutlinedButton.icon(
+                  onPressed: manageDevices,
+                  icon: const Icon(Icons.security),
+                  label: const Text('MANAGE DEVICES'),
+                ),
               if (pairedSessionId != null) ...[
                 const SizedBox(height: 12),
                 Text(

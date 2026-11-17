@@ -5,7 +5,7 @@
 - Firebase-authenticated users can create a five-minute, one-time desktop pairing code from ULTRON Mobile.
 - ULTRON Desktop exchanges the code for a random, revocable device credential. Only a SHA-256 digest of that credential is stored by the backend.
 - Firebase users and paired desktop devices can create sessions and append/read protocol v1.0 events. Every session lookup is scoped to the authenticated Firebase UID.
-- Device credentials can be listed and revoked by the owning Firebase account.
+- Device credentials can be listed and revoked by the owning Firebase account from the mobile app's **MANAGE DEVICES** action.
 - The desktop app stores its device credential in its local ULTRON data directory. It is not an AI-provider key and grants access only to the owner's session/event API.
 
 ## Configuration
@@ -25,7 +25,9 @@ Start pairing:
 ## Security boundaries
 
 - Firebase ID tokens are verified server-side, including revoked-token checks through the existing verifier.
-- Pairing codes expire after five minutes and are consumed exactly once.
+- Pairing codes expire after five minutes and are consumed exactly once, including when two exchange requests arrive concurrently.
+- Mobile Firebase principals may append only `mobile` events; paired desktop principals may append only `desktop` events. Server/agent event sources are reserved for trusted server-side integrations.
+- If a desktop credential is revoked, the desktop client clears its local copy when the next event sync receives HTTP 401.
 - Device bearer tokens are random, stored only as hashes on the backend, and can be revoked by the owning Firebase user.
 - AI provider keys, LiveKit secrets, and privileged desktop automation are not moved to this service.
 - The desktop credential file is stored locally under the ULTRON data directory; protect the Windows user account and device. Do not copy this file into backups or source control.
