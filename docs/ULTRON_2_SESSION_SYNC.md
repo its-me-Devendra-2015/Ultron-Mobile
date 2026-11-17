@@ -43,3 +43,6 @@ A mobile pairing-code request creates an owner-scoped shared session and returns
 Session creation is idempotent for the same owner and ID. Event timestamps must include a timezone; optional request_id correlation values are persisted and returned. Existing SQLite databases are upgraded in place with the new event and pairing columns.
 
 The mobile API client refuses plain HTTP for non-loopback hosts so Firebase ID tokens are not sent to a remote endpoint without TLS. Deploy the FastAPI service behind HTTPS and mount a persistent volume for ULTRON_SESSION_DB; the included SQLite store is intended for a single backend instance, not an ephemeral serverless filesystem.
+
+
+Desktop device tokens are least-privilege: each token can read and append only to the one session created for its pairing. They cannot enumerate the owner's other sessions, create new sessions, issue pairing codes, or revoke devices. Legacy device tokens without a session scope are rejected and must be re-paired.

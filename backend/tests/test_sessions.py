@@ -63,7 +63,27 @@ def test_authenticated_session_event_and_owner_isolation(tmp_path, monkeypatch):
     bob_headers = {"Authorization": f"Bearer {bob['device_token']}"}
     assert client.get(f"/api/sessions/{sid}/events", headers=bob_headers).status_code == 404
     assert client.get(f"/api/sessions/{sid}", headers=bob_headers).status_code == 404
-    assert client.post("/api/sessions", headers=bob_headers, json={"session_id": sid}).status_code == 409
+    assert client.post("/api/sessions", headers=bob_headers, json={"session_id": sid}).status_code == 403
+
+    # A paired desktop can only see its paired session, not another session
+    # owned by the same Firebase account.
+    other = client.post(
+        "/api/sessions",
+        headers={"Authorization": "Bearer firebase-test"},
+        json={"title": "Private mobile session"},
+    )
+    assert other.status_code == 200
+    other_id = other.json()["session_id"]
+    assert client.get("/api/sessions", headers=headers).json()["sessions"] == [
+        {
+            "session_id": sid,
+            "title": "ULTRON shared session",
+            "created_at": client.get(f"/api/sessions/{sid}", headers=headers).json()["created_at"],
+            "updated_at": client.get(f"/api/sessions/{sid}", headers=headers).json()["updated_at"],
+        }
+    ]
+    assert client.get(f"/api/sessions/{other_id}", headers=headers).status_code == 404
+    assert client.get(f"/api/sessions/{other_id}/events", headers=headers).status_code == 404
     main.app.dependency_overrides.clear()
 
 
@@ -173,7 +193,9 @@ def test_existing_database_schema_is_migrated_in_place(tmp_path, monkeypatch):
     try:
         event_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(events)")}
         pairing_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(pairing_codes)")}
+        device_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(devices)")}
         assert "request_id" in event_columns
         assert "session_id" in pairing_columns
+        assert "session_id" in device_columns
     finally:
         migrated.close()

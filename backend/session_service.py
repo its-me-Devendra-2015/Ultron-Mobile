@@ -52,7 +52,7 @@ def _db() -> sqlite3.Connection:
       );
       CREATE TABLE IF NOT EXISTS devices(
         device_id TEXT NOT NULL UNIQUE, token_hash TEXT PRIMARY KEY, owner_uid TEXT NOT NULL,
-        name TEXT NOT NULL, created_at TEXT NOT NULL,
+        session_id TEXT, name TEXT NOT NULL, created_at TEXT NOT NULL,
         last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0
       );
     """)
@@ -60,6 +60,7 @@ def _db() -> sqlite3.Connection:
     migrations = {
         "events": {"request_id": "TEXT"},
         "pairing_codes": {"session_id": "TEXT"},
+        "devices": {"session_id": "TEXT"},
     }
     for table, columns_to_add in migrations.items():
         existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -115,21 +116,29 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             db = _db()
             try:
                 row = db.execute(
-                    "SELECT owner_uid, revoked FROM devices WHERE token_hash=?",
+                    "SELECT owner_uid, revoked, session_id FROM devices WHERE token_hash=?",
                     (_digest(token),),
                 ).fetchone()
-                if not row or row["revoked"]:
-                    raise HTTPException(status_code=401, detail="Invalid or revoked device token")
+                if not row or row["revoked"] or not row["session_id"]:
+                    raise HTTPException(status_code=401, detail="Invalid, revoked, or unscoped device token")
                 db.execute(
                     "UPDATE devices SET last_used_at=? WHERE token_hash=?",
                     (_now(), _digest(token)),
                 )
                 db.commit()
-                return {"uid": row["owner_uid"], "principal_type": "device"}
+                return {
+                    "uid": row["owner_uid"],
+                    "principal_type": "device",
+                    "session_id": row["session_id"],
+                }
             finally:
                 db.close()
         user = require_firebase_user(authorization)
         return {**user, "principal_type": "user"}
+
+    def assert_device_session(user: dict, session_id: str):
+        if user.get("principal_type") == "device" and user.get("session_id") != session_id:
+            raise HTTPException(status_code=404, detail="Session not found")
 
     @router.post("/api/devices/pairing-code")
     def create_pairing_code(
@@ -190,8 +199,8 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
                     (session_id, row["owner_uid"], "ULTRON shared session", now, now),
                 )
             db.execute(
-                "INSERT INTO devices(device_id,token_hash,owner_uid,name,created_at) VALUES(?,?,?,?,?)",
-                (device_id, _digest(token), row["owner_uid"], request.device_label.strip(), now),
+                "INSERT INTO devices(device_id,token_hash,owner_uid,session_id,name,created_at) VALUES(?,?,?,?,?,?)",
+                (device_id, _digest(token), row["owner_uid"], session_id, request.device_label.strip(), now),
             )
             db.commit()
             return {
@@ -225,6 +234,8 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             session_id = str(uuid.UUID(request.session_id)) if request.session_id else str(uuid.uuid4())
         except ValueError:
             raise HTTPException(status_code=422, detail="session_id must be a UUID")
+        if user.get("principal_type") == "device" and user.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Paired desktop devices cannot create other sessions")
         now = _now()
         db = _db()
         try:
@@ -256,6 +267,12 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
     def list_sessions(user: dict = Depends(principal)):
         db = _db()
         try:
+            if user.get("principal_type") == "device":
+                row = db.execute(
+                    "SELECT id AS session_id,title,created_at,updated_at FROM sessions WHERE id=? AND owner_uid=?",
+                    (user.get("session_id"), str(user.get("uid", ""))),
+                ).fetchone()
+                return {"sessions": [dict(row)] if row else []}
             rows = db.execute(
                 "SELECT id AS session_id,title,created_at,updated_at FROM sessions WHERE owner_uid=? ORDER BY updated_at DESC LIMIT 100",
                 (str(user.get("uid", "")),),
@@ -278,6 +295,7 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Session not found")
+            assert_device_session(user, normalized_id)
             return dict(row)
         finally:
             db.close()
@@ -298,6 +316,9 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
             raise HTTPException(status_code=422, detail="Unsupported protocol version")
         if request.session_id != session_id:
             raise HTTPException(status_code=422, detail="Event session_id does not match route")
+        assert_device_session(user, session_id)
+        if user.get("principal_type") == "device" and request.source != "desktop":
+            raise HTTPException(status_code=403, detail="Paired desktop devices may only append desktop events")
         if request.event_type not in EVENT_TYPES or request.source not in SOURCES:
             raise HTTPException(status_code=422, detail="Unsupported event type or source")
         if len(json.dumps(request.payload, ensure_ascii=False)) > 32768:
@@ -326,6 +347,7 @@ def build_session_router(require_firebase_user: Callable[..., dict]) -> APIRoute
     def read_events(session_id: str, limit: int = 100, user: dict = Depends(principal)):
         if limit < 1 or limit > 500:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+        assert_device_session(user, session_id)
         db = _db()
         try:
             owned = db.execute(
