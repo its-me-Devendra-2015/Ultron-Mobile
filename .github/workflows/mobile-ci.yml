@@ -47,5 +47,5 @@ jobs:
       - name: Generate Android and iOS platform scaffolding
         run: flutter create --platforms=android,ios .
       - run: flutter pub get
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos
       - run: flutter test

@@ -161,7 +161,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
     if (sessionEndpoint.isNotEmpty) {
       sessionApi = SharedSessionApi(
         baseUri: Uri.parse(sessionEndpoint),
-        tokenProvider: () async => FirebaseAuth.instance.currentUser?.getIdToken(true),
+        tokenProvider: () async {
+          final user = FirebaseAuth.instance.currentUser;
+          return user == null ? null : await user.getIdToken(true);
+        },
       );
       _loadLatestSession();
     }

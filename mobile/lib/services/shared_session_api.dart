@@ -11,7 +11,16 @@ class SharedSessionApi {
     required this.baseUri,
     required this.tokenProvider,
     http.Client? httpClient,
-  }) : _http = httpClient ?? http.Client();
+  }) : _http = httpClient ?? http.Client() {
+    final host = baseUri.host.toLowerCase();
+    final isLoopback = const {'localhost', '127.0.0.1', '::1'}.contains(host);
+    if (baseUri.scheme != 'https' &&
+        !(baseUri.scheme == 'http' && isLoopback)) {
+      throw ArgumentError(
+        'ULTRON_SESSION_ENDPOINT must use HTTPS (HTTP is allowed only for loopback development).',
+      );
+    }
+  }
 
   final Uri baseUri;
   final FirebaseIdTokenProvider tokenProvider;

@@ -60,7 +60,22 @@ void main() {
       tokenProvider: () async => null,
       httpClient: MockClient((_) async => http.Response('{}', 200)),
     );
-    expect(api.listSessions(), throwsA(isA<StateError>()));
+    await expectLater(api.listSessions(), throwsA(isA<StateError>()));
     api.dispose();
+  });
+
+  test('remote session endpoints require HTTPS', () {
+    expect(
+      () => SharedSessionApi(
+        baseUri: Uri.parse('http://api.example.test'),
+        tokenProvider: () async => 'firebase-test',
+      ),
+      throwsArgumentError,
+    );
+    final local = SharedSessionApi(
+      baseUri: Uri.parse('http://127.0.0.1:8000'),
+      tokenProvider: () async => 'firebase-test',
+    );
+    local.dispose();
   });
 }

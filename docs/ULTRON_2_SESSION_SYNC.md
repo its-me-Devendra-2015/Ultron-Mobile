@@ -41,3 +41,5 @@ The backend tests cover unauthenticated rejection, owner isolation, one-time pai
 A mobile pairing-code request creates an owner-scoped shared session and returns its session_id. The one-time desktop exchange returns that same ID with the revocable device credential. Desktop chat events and mobile LiveKit voice lifecycle events are appended to this shared session. Mobile can reload the latest owned session and read its event history after signing in again.
 
 Session creation is idempotent for the same owner and ID. Event timestamps must include a timezone; optional request_id correlation values are persisted and returned. Existing SQLite databases are upgraded in place with the new event and pairing columns.
+
+The mobile API client refuses plain HTTP for non-loopback hosts so Firebase ID tokens are not sent to a remote endpoint without TLS. Deploy the FastAPI service behind HTTPS and mount a persistent volume for ULTRON_SESSION_DB; the included SQLite store is intended for a single backend instance, not an ephemeral serverless filesystem.
